@@ -1,189 +1,111 @@
 import streamlit as st
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from docx import Document
+from docx.shared import RGBColor
+import fitz  # PyMuPDF for PDF processing
+import io
+import pymupdf 
 
+st.set_page_config(page_title="Plagiarism Detection", page_icon="⚖️")
 
-st.set_page_config(page_title='Title Here', page_icon=':shark:', layout='wide')    # Set page title, icon and layout
-st.title('This is Title Text in WebPage')    # Title of the page
+@st.cache_resource
+def load_model():
+    local_model_path = "all-MiniLM-L6-v2"  # Path to local model or download from Hugging Face
+    model = SentenceTransformer(local_model_path)
+    return model
 
+model = load_model()
 
+def extract_text_from_pdf(uploaded_file):
+    text = ""
+    doc = pymupdf .open(stream=uploaded_file.getvalue(), filetype="pdf")  # Corrected method
+    for page in doc:
+        text += page.get_text("text")
+    return text
 
+def extract_text_from_docx(uploaded_file):
+    doc = Document(uploaded_file)
+    return "\n".join([para.text for para in doc.paragraphs])
 
-# st.header("_Streamlit_ is :blue[cool] :sunglasses:")
-# st.header("This is a header with a divider", divider="gray")
-# st.header("These headers have rotating dividers", divider=True)
-# st.header("One", divider=True)
-# st.header("Two", divider=True)
-# st.header("Three", divider=True)
-# st.header("Four", divider=True)
-# st.header("Foui", divider=True)
+def extract_text_from_txt(uploaded_file):
+    return uploaded_file.read().decode("utf-8")
 
+def calculate_similarity(text1, text2):
+    embedding1 = model.encode(text1, convert_to_tensor=True)
+    embedding2 = model.encode(text2, convert_to_tensor=True)
+    similarity = cosine_similarity([embedding1.cpu().numpy()], [embedding2.cpu().numpy()])
+    return similarity[0][0]
 
+def compare_files(files):
+    file_texts = []
+    for file in files:
+        file_name = file.name
+        if file_name.endswith(".pdf"):
+            text = extract_text_from_pdf(file)
+        elif file_name.endswith(".docx"):
+            text = extract_text_from_docx(file)
+        elif file_name.endswith(".txt"):
+            text = extract_text_from_txt(file)
+        else:
+            continue
+        file_texts.append((text, file))
+    return file_texts
 
-# # Header
-# st.header("This is a header", help='Helper here', anchor='anchor_id1') 
-
-# # Subheader
-# st.subheader("This is a subheader",anchor='a2', help='Help for Sub Heading')
-
-
-# # Text
-# st.text(help='https://www.google.com',body="Hello World Text!!!")
-
-
-
-# # Markdown
-# st.markdown("- This is a markdown <h1>Hello Html</h1>", help='Markdown Help', unsafe_allow_html=True)
-
-
-# # Warnings and Errors
-a= 30
-b= 15
-if a<b:
-    st.success("a is less than b", icon='👍'
-               )
-else:
-    st.error("a is greater than b", icon='👎')
-# success
-st.success("Success")
-
-# success
-st.info("Information", icon='🔔')
-
-# success
-st.warning("Warning", icon='⚠️')
-
-# success
-st.error("Error")
-
-# Exception - This has been added later
-exp = ZeroDivisionError("Trying to divide by Zero")
-st.exception(exp)
-
-
-
-
-# Write text
-st.write("Text with write<p>ASsfsg</p>", unsafe_allow_html=True)
-
-# Writing python inbuilt function range()
-st.write( "if" ,range(5),":")
-
-
-
-
-# Display Images
-
-# import Image from pillow to open images
-from PIL import Image
-img = Image.open("streamlit.png")
-
-# display image using streamlit
-# width is used to set the width of an image
-st.image(img, width=100, caption="This is Caption", channels='BGR',output_format='PNG',clamp=False) 
-
-
-
-
-# checkbox
-# check if the checkbox is checked
-# title of the checkbox is 'Show/Hide'
-st.checkbox( key="key1",disabled= False , label= "Try Label", label_visibility= 'visible'
-             )
-
-
-if st.checkbox("Show/Hide"):
-
-    # display the text if the checkbox returns True value
-    st.text("Showing the widget")
-else:
-    st.text("Hiding")
-
-
-
-
-
-# radio button
-# first argument is the title of the radio button
-# second argument is the options for the radio button
-status = st.radio("Select Gender: ", ('Male', 'Female'))
-
-# conditional statement to print 
-# Male if male is selected else print female
-# show the result using the success function
-if (status == 'Male'):
-    st.success("Male")
-else:
-    st.error("Female")
+def display_plagiarism_results(file_texts):
+    st.write("### Plagiarism Detection Results")
+    plagiarism_detected = False
+    first_detection = False
+    
+    for idx1, (text1, file1) in enumerate(file_texts):
+        for idx2, (text2, file2) in enumerate(file_texts):
+            if idx1 < idx2:
+                similarity = calculate_similarity(text1, text2)
                 
+                if similarity > 0.8:
+                    plagiarism_detected = True
+                    st.error(f"Plagiarism Detected between {file1.name} and {file2.name} - Similarity: {similarity*100:.2f}%")
+                    
+                    if not first_detection:
+                        first_detection = True
+                        document = Document()
+                        document.add_heading('Plagiarism Detected', 0)
+                        
+                        p = document.add_paragraph()
+                        run = p.add_run(f"Plagiarism between {file1.name} and {file2.name}. Similarity: {similarity*100:.2f}%")
+                        run.bold = True
+                        run.font.color.rgb = RGBColor(255, 0, 0)
+                        p.add_run("\n\n")
 
+                        p.add_run(f"Content from {file1.name}:\n").bold = True
+                        p.add_run(text1[:500] + "...\n\n")
 
+                        p.add_run(f"Content from {file2.name}:\n").bold = True
+                        p.add_run(text2[:500] + "...\n\n")
 
-# Selection box
+                        byte_io = io.BytesIO()
+                        document.save(byte_io)
+                        byte_io.seek(0)
 
-# first argument takes the titleof the selectionbox
-# second argument takes options
-hobby = st.selectbox("Hobbies: ",
-                     ['Dancing', 'Reading', 'Sports'])
+                        st.download_button(
+                            label="Download Plagiarism Report",
+                            data=byte_io,
+                            file_name="Detected.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
 
-# print the selected hobby
-st.write("Your hobby is: ", hobby)
+    if plagiarism_detected:
+        st.markdown("<p style='color:red; font-size:20px;'>Plagiarism detected.</p>", unsafe_allow_html=True)
+    else:
+        st.markdown("<p style='color:green; font-size:20px;'>No plagiarism detected.</p>", unsafe_allow_html=True)
 
+st.title("Plagiarism Detection Tool")
+st.write("Upload at least two files (PDF, DOCX, or TXT) to check for plagiarism.")
 
+uploaded_files = st.file_uploader("Choose files", accept_multiple_files=True, type=['pdf', 'docx', 'txt'])
 
-
-
-# multi select box
-
-# first argument takes the box title
-# second argument takes the options to show
-hobbies = st.multiselect("Hobbies: ",
-                         ['Dancing', 'Reading', 'Sports'])
-
-# write the selected options
-st.write("You selected", len(hobbies), 'hobbies')
-for hobby in hobbies:
-    st.write(hobby)
-
-
-
-# Create a simple button that does nothing
-st.button("Click me for no reason")
-
-# Create a button, that when clicked, shows a text
-if(st.button("About")):
-    st.text("Welcome To Lecure of Streamlit!!!")
-
-
-
-
-# Text Input
-
-# save the input text in the variable 'name'
-# first argument shows the title of the text input box
-# second argument displays a default text inside the text input area
-name = st.text_input("Enter Your name", "Type Here ...")
-
-# display the name when the submit button is clicked
-# .title() is used to get the input text string
-if(st.button('Submit')):
-    name = "Hii, "+name
-    result = name.title()
-    st.success(result)
-
-
-
-
-# slider
-
-# first argument takes the title of the slider
-# second argument takes the starting of the slider
-# last argument takes the end number
-level = st.slider("Select the level", 1, 100)
-
-# print the level
-# format() is used to print value 
-# of a variable at a specific position
-st.text('Selected: {}'.format(level))
-
-
-
-
+if len(uploaded_files) >= 2:
+    file_texts = compare_files(uploaded_files)
+    display_plagiarism_results(file_texts)
+else:
+    st.warning("Please upload at least two files for plagiarism detection.")
